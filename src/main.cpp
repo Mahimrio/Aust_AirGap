@@ -1,6 +1,6 @@
 /*
  * ==========================================================
- *  RoboFusion 1.0 - Stage 3 (WiFi Setup & Network Memory)
+ *  RoboFusion 1.0 - Stage 3 & 4 Ready (WiFi Setup & Dashboard)
  *  Board      : ESP32-S3-CAM
  *  Framework  : Arduino (PlatformIO)
  *
@@ -9,7 +9,7 @@
  *    2. IR Polling      : read GPIO2 every 1000 ms (1 Hz) + 3ms probe
  *    3. DHT11 Polling   : read DHT11 on GPIO3 every 5000 ms (0.2 Hz)
  *    4. Button Polling  : poll GPIO45 for >2s hold to reset NVS
- *    5. WiFi / WebServer: handle STA connect timeout (12s) and AP server
+ *    5. WiFi / WebServer: handle STA connect timeout (12s), AP server, and Dashboard
  * ==========================================================
  */
 
@@ -99,7 +99,31 @@ static bool isSensorConnected(const uint8_t pin) {
 /* ------------------------------------------------------------------
  * Web Server Route Handlers
  * ------------------------------------------------------------------ */
-static void handleRoot() {
+static void handleDashboard() {
+  String html = "<!DOCTYPE html><html><head><title>RoboFusion Dashboard</title>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<style>";
+  html += "body { font-family: 'Segoe UI', Arial, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }";
+  html += ".card { background: rgba(30, 41, 59, 0.8); backdrop-filter: blur(10px); padding: 2.5rem; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); width: 100%; max-width: 420px; border: 1px solid #334155; text-align: center; }";
+  html += "h2 { color: #38bdf8; margin-bottom: 1.5rem; font-size: 1.5rem; }";
+  html += ".badge { display: inline-block; padding: 0.35rem 0.85rem; background: #10b981; color: #fff; border-radius: 20px; font-size: 0.875rem; font-weight: bold; margin-bottom: 1.5rem; }";
+  html += ".info-box { background: #1e293b; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid #475569; text-align: left; }";
+  html += ".info-box strong { color: #94a3b8; font-size: 0.85rem; display: block; margin-bottom: 0.25rem; }";
+  html += ".info-box span { color: #fff; font-size: 1.1rem; font-weight: bold; }";
+  html += "</style></head><body>";
+  html += "<div class='card'>";
+  html += "<h2>RoboFusion Dashboard</h2>";
+  html += "<div class='badge'>Connected & Online</div>";
+  html += "<div class='info-box'><strong>Device Name</strong><span>" + deviceName + "</span></div>";
+  html += "<div class='info-box'><strong>Connected Network</strong><span>" + wifiSSID + "</span></div>";
+  html += "<div class='info-box'><strong>IP Address</strong><span>" + WiFi.localIP().toString() + "</span></div>";
+  html += "<div class='info-box'><strong>System Status</strong><span>Online (Non-blocking Scheduler Active)</span></div>";
+  html += "</div></body></html>";
+
+  server.send(200, "text/html", html);
+}
+
+static void handleSetupForm() {
   String html = "<!DOCTYPE html><html><head><title>RoboFusion Setup</title>";
   html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
   html += "<style>";
@@ -122,6 +146,14 @@ static void handleRoot() {
   html += "</form></div></body></html>";
 
   server.send(200, "text/html", html);
+}
+
+static void handleRoot() {
+  if (currentMode == MODE_STA_CONNECTED) {
+    handleDashboard();
+  } else {
+    handleSetupForm();
+  }
 }
 
 static void handleSave() {
@@ -154,6 +186,16 @@ static void handleSave() {
   }
 }
 
+static void initWebServerRoutes() {
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/dashboard", HTTP_GET, handleDashboard);
+  server.on("/save", HTTP_POST, handleSave);
+  server.onNotFound([]() {
+    server.send(204, "text/plain", "");
+  });
+  server.begin();
+}
+
 /* ------------------------------------------------------------------
  * startAPMode()
  * ------------------------------------------------------------------ */
@@ -162,12 +204,7 @@ static void startAPMode() {
   /* Open Access Point network for easy setup portal access */
   WiFi.softAP("RoboFusion-AirGap");
 
-  server.on("/", HTTP_GET, handleRoot);
-  server.on("/save", HTTP_POST, handleSave);
-  server.onNotFound([]() {
-    server.send(204, "text/plain", "");
-  });
-  server.begin();
+  initWebServerRoutes();
 
   currentMode = MODE_AP_SETUP;
   Serial.printf("[%lu ms] AP Mode Started. SSID: RoboFusion-AirGap, IP: %s\n", millis(), WiFi.softAPIP().toString().c_str());
@@ -213,6 +250,9 @@ void setup() {
     WiFi.mode(WIFI_STA);
     WiFi.setHostname(deviceName.c_str());
     WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
+
+    initWebServerRoutes();
+
     wifiConnectStartMs = millis();
     currentMode = MODE_STA_CONNECTING;
   }
@@ -307,12 +347,16 @@ void loop() {
   if (currentMode == MODE_STA_CONNECTING) {
     if (WiFi.status() == WL_CONNECTED) {
       currentMode = MODE_STA_CONNECTED;
-      Serial.printf("[%lu ms] WiFi Connected! IP Address: %s\n", now, WiFi.localIP().toString().c_str());
+      Serial.printf("[%lu ms] WiFi Connected! IP Address: %s | Dashboard: http://%s/\n",
+                    now, WiFi.localIP().toString().c_str(), WiFi.localIP().toString().c_str());
     } else if (now - wifiConnectStartMs >= WIFI_TIMEOUT_MS) {
       Serial.printf("[%lu ms] WiFi Connection Timeout (12s). Switching to AP Mode...\n", now);
       startAPMode();
     }
-  } else if (currentMode == MODE_AP_SETUP) {
+  }
+
+  /* Handle Web Server client requests in both AP Setup mode & STA Connected mode */
+  if (currentMode == MODE_AP_SETUP || currentMode == MODE_STA_CONNECTED) {
     server.handleClient();
   }
 }
