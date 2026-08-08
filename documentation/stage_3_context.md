@@ -18,7 +18,7 @@ Stage 3 implements dynamic WiFi provisioning, non-volatile memory (NVS via `Pref
 - Loaded during `setup()`. If `ssid` is blank, immediately enters AP setup mode.
 
 ### 2. Access Point & HTTP Web Server Mode
-- **AP SSID:** `RoboFusion-Setup` (Open Network, default IP: `192.168.4.1`)
+- **AP SSID:** `RoboFusion-AirGap` (Open Network, default IP: `192.168.4.1`)
 - **Web Server Routes:**
   - `GET /`: Renders a modern, responsive HTML configuration form.
   - `POST /save`: Saves submitted `ssid`, `password`, and `deviceName` to NVS, sends a response page, and reboots the ESP32.

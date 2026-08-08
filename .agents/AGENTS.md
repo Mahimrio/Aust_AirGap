@@ -39,7 +39,7 @@ This file serves as the single source of truth for AI agents (and human engineer
    - Accurately flags missing VCC, GND, or OUT/Signal wires on sensors.
 3. **WiFi Provisioning & NVS Memory (`Preferences.h`):**
    - NVS Namespace: `"wifi_config"`.
-   - AP Name: `"RoboFusion-Setup"` (Default IP: `192.168.4.1`).
+   - AP Name: `"RoboFusion-AirGap"` (Default IP: `192.168.4.1`).
    - STA Connection Timeout: 12000 ms (12 seconds) non-blocking fallback to AP mode.
 4. **Log Formatting:**
    - Every log message printed in `loop()` MUST be prepended with a millisecond timestamp: `[%lu ms]`.

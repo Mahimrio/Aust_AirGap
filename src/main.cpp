@@ -65,7 +65,7 @@ static bool buttonPressedState   = false;
 
 static String wifiSSID        = "";
 static String wifiPassword    = "";
-static String deviceName      = "RoboFusion-ESP32";
+static String deviceName      = "RoboFusion-AirGap";
 
 /* ------------------------------------------------------------------
  * isSensorConnected()
@@ -155,14 +155,14 @@ static void handleSave() {
  * ------------------------------------------------------------------ */
 static void startAPMode() {
   WiFi.mode(WIFI_AP);
-  WiFi.softAP("RoboFusion-Setup");
+  WiFi.softAP("RoboFusion-AirGap");
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.begin();
 
   currentMode = MODE_AP_SETUP;
-  Serial.printf("[%lu ms] AP Mode Started. SSID: RoboFusion-Setup, IP: %s\n", millis(), WiFi.softAPIP().toString().c_str());
+  Serial.printf("[%lu ms] AP Mode Started. SSID: RoboFusion-AirGap, IP: %s\n", millis(), WiFi.softAPIP().toString().c_str());
 }
 
 /* ------------------------------------------------------------------
