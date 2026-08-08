@@ -48,7 +48,7 @@ static SystemMode currentMode = MODE_STA_CONNECTING;
 static constexpr uint32_t LED_TOGGLE_INTERVAL_MS = 100UL;   // 5 Hz rhythm
 static constexpr uint32_t IR_POLL_INTERVAL_MS    = 1000UL;  // 1 s schedule
 static constexpr uint32_t DHT_POLL_INTERVAL_MS   = 5000UL;  // 5 s schedule
-static constexpr uint32_t WIFI_TIMEOUT_MS        = 12000UL; // 12 s connection fallback timeout
+static constexpr uint32_t WIFI_TIMEOUT_MS        = 15000UL; // 15 s connection fallback timeout
 static constexpr uint32_t BUTTON_HOLD_TIME_MS    = 2000UL;  // 2 s reset hold time
 
 /* ------------------------------------------------------------------
@@ -245,7 +245,7 @@ void setup() {
   } else {
     Serial.printf("[%lu ms] [NVS] Loaded SSID: '%s' | Password length: %d chars | Device: '%s'\n",
                   millis(), wifiSSID.c_str(), wifiPassword.length(), deviceName.c_str());
-    Serial.printf("[%lu ms] Connecting to WiFi (12s timeout)...\n", millis());
+    Serial.printf("[%lu ms] Connecting to WiFi (15s timeout)...\n", millis());
     WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
     WiFi.setHostname(deviceName.c_str());
@@ -350,7 +350,7 @@ void loop() {
       Serial.printf("[%lu ms] WiFi Connected! IP Address: %s | Dashboard: http://%s/\n",
                     now, WiFi.localIP().toString().c_str(), WiFi.localIP().toString().c_str());
     } else if (now - wifiConnectStartMs >= WIFI_TIMEOUT_MS) {
-      Serial.printf("[%lu ms] WiFi Connection Timeout (12s). Switching to AP Mode...\n", now);
+      Serial.printf("[%lu ms] WiFi Connection Failed / Timeout (15s). Switching to Setup AP Mode...\n", now);
       startAPMode();
     }
   }
