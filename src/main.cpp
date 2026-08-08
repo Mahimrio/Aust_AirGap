@@ -59,9 +59,11 @@ static uint32_t lastIrPollMs      = 0UL;
 static uint32_t lastDhtPollMs     = 0UL;
 static uint32_t wifiConnectStartMs= 0UL;
 static uint32_t buttonPressStartMs= 0UL;
+static uint32_t rebootScheduledMs = 0UL;
 
 static bool ledState             = LOW;
 static bool buttonPressedState   = false;
+static bool pendingReboot        = false;
 
 static String wifiSSID        = "";
 static String wifiPassword    = "";
@@ -142,9 +144,11 @@ static void handleSave() {
     
     server.send(200, "text/html", resp);
 
-    Serial.printf("[%lu ms] [NVS] Credentials saved for '%s'. Rebooting...\n", millis(), wifiSSID.c_str());
-    delay(1000);
-    ESP.restart();
+    Serial.printf("[%lu ms] [NVS] Credentials saved for '%s'. Rebooting in 1s...\n", millis(), wifiSSID.c_str());
+    
+    /* Schedule non-blocking reboot */
+    pendingReboot = true;
+    rebootScheduledMs = millis() + 1000UL;
   } else {
     server.send(400, "text/plain", "Missing SSID");
   }
@@ -155,10 +159,14 @@ static void handleSave() {
  * ------------------------------------------------------------------ */
 static void startAPMode() {
   WiFi.mode(WIFI_AP);
+  /* Open Access Point network for easy setup portal access */
   WiFi.softAP("RoboFusion-AirGap");
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/save", HTTP_POST, handleSave);
+  server.onNotFound([]() {
+    server.send(204, "text/plain", "");
+  });
   server.begin();
 
   currentMode = MODE_AP_SETUP;
@@ -191,14 +199,16 @@ void setup() {
   preferences.begin("wifi_config", true);
   wifiSSID     = preferences.getString("ssid", "");
   wifiPassword = preferences.getString("password", "");
-  deviceName   = preferences.getString("deviceName", "RoboFusion-ESP32");
+  deviceName   = preferences.getString("deviceName", "RoboFusion-AirGap");
   preferences.end();
 
   if (wifiSSID.length() == 0) {
     Serial.printf("[%lu ms] [NVS] No saved WiFi credentials found. Entering AP Mode...\n", millis());
     startAPMode();
   } else {
-    Serial.printf("[%lu ms] [NVS] Loaded SSID: '%s'. Connecting to WiFi...\n", millis(), wifiSSID.c_str());
+    Serial.printf("[%lu ms] [NVS] Loaded SSID: '%s' | Password length: %d chars | Device: '%s'\n",
+                  millis(), wifiSSID.c_str(), wifiPassword.length(), deviceName.c_str());
+    Serial.printf("[%lu ms] Connecting to WiFi (12s timeout)...\n", millis());
     WiFi.mode(WIFI_STA);
     WiFi.setHostname(deviceName.c_str());
     WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
@@ -212,6 +222,13 @@ void setup() {
  * ------------------------------------------------------------------ */
 void loop() {
   const uint32_t now = millis();
+
+  /* ---------------------------------------------------------------
+   * Non-Blocking Scheduled Reboot Check
+   * --------------------------------------------------------------- */
+  if (pendingReboot && now >= rebootScheduledMs) {
+    ESP.restart();
+  }
 
   /* ---------------------------------------------------------------
    * Job 1 : LED Heartbeat (fixed 5 Hz rhythm, never blocks)
@@ -265,12 +282,19 @@ void loop() {
       buttonPressedState = true;
       buttonPressStartMs = now;
     } else if (now - buttonPressStartMs >= BUTTON_HOLD_TIME_MS) {
-      Serial.printf("[%lu ms] [RESET] Reset Button held > 2s! Clearing credentials & rebooting...\n", now);
+      Serial.printf("[%lu ms] [RESET] Reset Button held > 2s! Clearing NVS & WiFi storage...\n", now);
+      
+      /* Clear Preferences NVS */
       preferences.begin("wifi_config", false);
       preferences.clear();
       preferences.end();
-      delay(500);
-      ESP.restart();
+
+      /* Erase ESP-IDF internal WiFi NVS storage */
+      WiFi.disconnect(true, true);
+
+      /* Schedule immediate non-blocking reboot */
+      pendingReboot = true;
+      rebootScheduledMs = now + 200UL;
     }
   } else {
     buttonPressedState = false;
