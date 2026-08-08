@@ -209,6 +209,7 @@ void setup() {
     Serial.printf("[%lu ms] [NVS] Loaded SSID: '%s' | Password length: %d chars | Device: '%s'\n",
                   millis(), wifiSSID.c_str(), wifiPassword.length(), deviceName.c_str());
     Serial.printf("[%lu ms] Connecting to WiFi (12s timeout)...\n", millis());
+    WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
     WiFi.setHostname(deviceName.c_str());
     WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
