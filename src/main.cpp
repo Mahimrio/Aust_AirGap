@@ -18,6 +18,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <DNSServer.h>
 #include <driver/gpio.h>
 
 /* ------------------------------------------------------------------
@@ -32,6 +33,7 @@ static constexpr uint8_t BUTTON_PIN = 45;  // GPIO45 - Physical Reset Push-Butto
 DHT dht(DHT_PIN, DHTTYPE);
 
 WebServer server(80);
+DNSServer dnsServer;
 Preferences preferences;
 
 /* ------------------------------------------------------------------
@@ -204,6 +206,9 @@ static void startAPMode() {
   /* Open Access Point network for easy setup portal access */
   WiFi.softAP("RoboFusion-AirGap");
 
+  /* Start Captive Portal DNS Server (redirects all domains to 192.168.4.1) */
+  dnsServer.start(53, "*", WiFi.softAPIP());
+
   initWebServerRoutes();
 
   currentMode = MODE_AP_SETUP;
@@ -355,8 +360,11 @@ void loop() {
     }
   }
 
-  /* Handle Web Server client requests in both AP Setup mode & STA Connected mode */
-  if (currentMode == MODE_AP_SETUP || currentMode == MODE_STA_CONNECTED) {
+  /* Handle Web Server & Captive Portal client requests */
+  if (currentMode == MODE_AP_SETUP) {
+    dnsServer.processNextRequest();
+    server.handleClient();
+  } else if (currentMode == MODE_STA_CONNECTED) {
     server.handleClient();
   }
 }
