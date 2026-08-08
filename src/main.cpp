@@ -172,9 +172,15 @@ static void handleSave() {
     preferences.putString("deviceName", deviceName);
     preferences.end();
 
-    String resp = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
-    resp += "<style>body{font-family:Arial;background:#0f172a;color:#38bdf8;text-align:center;padding-top:20vh;}</style></head>";
-    resp += "<body><h2>Credentials Saved!</h2><p>Rebooting ESP32-S3 to connect to '" + wifiSSID + "'...</p></body></html>";
+    String resp = "<!DOCTYPE html><html><head>";
+    resp += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    resp += "<meta http-equiv='refresh' content='18; url=http://192.168.4.1/'>";
+    resp += "<style>body{font-family:'Segoe UI',Arial,sans-serif;background:#0f172a;color:#f8fafc;text-align:center;padding:15vh 1rem;margin:0;}";
+    resp += ".card{background:rgba(30,41,59,0.8);backdrop-filter:blur(10px);padding:2rem;border-radius:16px;box-shadow:0 10px 25px rgba(0,0,0,0.5);max-width:400px;margin:0 auto;border:1px solid #334155;}";
+    resp += "h2{color:#38bdf8;} p{color:#94a3b8;}</style></head><body>";
+    resp += "<div class='card'><h2>Credentials Saved!</h2>";
+    resp += "<p>Connecting to <strong>" + wifiSSID + "</strong>...</p>";
+    resp += "<p style='font-size:0.85rem;margin-top:1.5rem;'>If connection fails (wrong password), this page will auto-reload in 18s to setup mode.</p></div></body></html>";
     
     server.send(200, "text/html", resp);
 
