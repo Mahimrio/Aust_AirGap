@@ -1,74 +1,79 @@
 /*
  * ==========================================================
- *  RoboFusion 1.0 - Stage 2
+ *  RoboFusion 1.0 - Stage 3 (WiFi Setup & Network Memory)
  *  Board      : ESP32-S3-CAM
  *  Framework  : Arduino (PlatformIO)
  *
  *  Jobs (strictly non-blocking, millis()-based concurrency):
- *    1. LED Heartbeat : toggle GPIO1 every 100 ms (5 Hz)
- *    2. IR Polling    : read GPIO2 every 1000 ms (1 Hz)
- *    3. Disconnect    : dynamic PULLUP/PULLDOWN probe on GPIO2
- *    4. DHT11 Polling : read DHT11 on GPIO3 every 5000 ms (0.2 Hz)
- *
- *  No delay() is used inside loop(), so the LED rhythm keeps
- *  running even while the sensor is read or disconnected.
+ *    1. LED Heartbeat   : toggle GPIO1 every 100 ms (5 Hz)
+ *    2. IR Polling      : read GPIO2 every 1000 ms (1 Hz) + 3ms probe
+ *    3. DHT11 Polling   : read DHT11 on GPIO3 every 5000 ms (0.2 Hz)
+ *    4. Button Polling  : poll GPIO45 for >2s hold to reset NVS
+ *    5. WiFi / WebServer: handle STA connect timeout (12s) and AP server
  * ==========================================================
  */
 
 #include <Arduino.h>
 #include <DHT.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
+#include <driver/gpio.h>
 
 /* ------------------------------------------------------------------
  * Pin Definitions & Objects
  * ------------------------------------------------------------------ */
-static constexpr uint8_t LED_PIN = 1;  // GPIO1 - Indicator LED (Output)
-static constexpr uint8_t IR_PIN  = 2;  // GPIO2 - IR Obstacle Sensor (Input)
-static constexpr uint8_t DHT_PIN = 3;  // GPIO3 - DHT11 Data Pin
+static constexpr uint8_t LED_PIN    = 1;   // GPIO1 - Indicator LED (Output)
+static constexpr uint8_t IR_PIN     = 2;   // GPIO2 - IR Obstacle Sensor (Input)
+static constexpr uint8_t DHT_PIN    = 3;   // GPIO3 - DHT11 Data Pin
+static constexpr uint8_t BUTTON_PIN = 45;  // GPIO45 - Physical Reset Push-Button (Input Pullup)
 
 #define DHTTYPE DHT11
 DHT dht(DHT_PIN, DHTTYPE);
 
+WebServer server(80);
+Preferences preferences;
+
 /* ------------------------------------------------------------------
- * Timing Configuration
+ * System Modes & Timing Configuration
  * ------------------------------------------------------------------ */
-static constexpr uint32_t LED_TOGGLE_INTERVAL_MS = 100UL;  // 100 ms ON / 100 ms OFF -> 5 Hz
-static constexpr uint32_t IR_POLL_INTERVAL_MS    = 1000UL; // Sensor polled every 1 second
-static constexpr uint32_t DHT_POLL_INTERVAL_MS   = 5000UL; // Sensor polled every 5 seconds
+enum SystemMode {
+  MODE_STA_CONNECTING,
+  MODE_STA_CONNECTED,
+  MODE_AP_SETUP
+};
+
+static SystemMode currentMode = MODE_STA_CONNECTING;
+
+static constexpr uint32_t LED_TOGGLE_INTERVAL_MS = 100UL;   // 5 Hz rhythm
+static constexpr uint32_t IR_POLL_INTERVAL_MS    = 1000UL;  // 1 s schedule
+static constexpr uint32_t DHT_POLL_INTERVAL_MS   = 5000UL;  // 5 s schedule
+static constexpr uint32_t WIFI_TIMEOUT_MS        = 12000UL; // 12 s connection fallback timeout
+static constexpr uint32_t BUTTON_HOLD_TIME_MS    = 2000UL;  // 2 s reset hold time
 
 /* ------------------------------------------------------------------
  * State Variables
  * ------------------------------------------------------------------ */
-static uint32_t lastLedToggleMs = 0UL;
-static uint32_t lastIrPollMs    = 0UL;
-static uint32_t lastDhtPollMs   = 0UL;
-static bool     ledState        = LOW;
+static uint32_t lastLedToggleMs   = 0UL;
+static uint32_t lastIrPollMs      = 0UL;
+static uint32_t lastDhtPollMs     = 0UL;
+static uint32_t wifiConnectStartMs= 0UL;
+static uint32_t buttonPressStartMs= 0UL;
+
+static bool ledState             = LOW;
+static bool buttonPressedState   = false;
+
+static String wifiSSID        = "";
+static String wifiPassword    = "";
+static String deviceName      = "RoboFusion-ESP32";
 
 /* ------------------------------------------------------------------
  * isSensorConnected()
- *
- * Detects if the jumper wire is physically attached to `pin`.
- *
- * Method:
- *   Enable the internal pull-up, sample the pin.
- *   Enable the internal pull-down, sample the pin.
- *   If the wire is connected to GND or VCC, the external signal
- *   dominates and BOTH samples read identically  -> CONNECTED.
- *   If the wire is removed (pin floating), the internal pull
- *   resistors dominate and the samples differ      -> DISCONNECTED.
- *
- * Uses ESP-IDF gpio_* functions for reliable pull-down on S3.
- *
- * Returns true  when the sensor is wired up,
- *         false when the pin is floating / disconnected.
  * ------------------------------------------------------------------ */
-#include <driver/gpio.h>
-
 static bool isSensorConnected(const uint8_t pin) {
   gpio_pad_select_gpio(static_cast<gpio_num_t>(pin));
 
-  /* --- Pull-up sample ---
-   * Allow 3000 us (3 ms) for any decoupling capacitors on unpowered sensor modules
-   * (like when VCC is removed) to charge through the internal pull-up resistor. */
+  /* --- Pull-up sample --- */
   gpio_set_direction(static_cast<gpio_num_t>(pin), GPIO_MODE_INPUT);
   gpio_pullup_en(static_cast<gpio_num_t>(pin));
   gpio_pulldown_dis(static_cast<gpio_num_t>(pin));
@@ -90,6 +95,77 @@ static bool isSensorConnected(const uint8_t pin) {
 }
 
 /* ------------------------------------------------------------------
+ * Web Server Route Handlers
+ * ------------------------------------------------------------------ */
+static void handleRoot() {
+  String html = "<!DOCTYPE html><html><head><title>RoboFusion Setup</title>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<style>";
+  html += "body { font-family: 'Segoe UI', Arial, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }";
+  html += ".card { background: rgba(30, 41, 59, 0.8); backdrop-filter: blur(10px); padding: 2.5rem; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); width: 100%; max-width: 380px; border: 1px solid #334155; }";
+  html += "h2 { color: #38bdf8; text-align: center; margin-bottom: 1.5rem; font-size: 1.5rem; }";
+  html += "label { display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: #94a3b8; }";
+  html += "input[type='text'], input[type='password'] { width: 100%; padding: 0.75rem; margin-bottom: 1.25rem; background: #1e293b; border: 1px solid #475569; border-radius: 8px; color: #fff; box-sizing: border-box; }";
+  html += "input:focus { outline: none; border-color: #38bdf8; }";
+  html += "button { width: 100%; padding: 0.875rem; background: #0284c7; border: none; border-radius: 8px; color: #fff; font-weight: bold; font-size: 1rem; cursor: pointer; transition: background 0.2s; }";
+  html += "button:hover { background: #0369a1; }";
+  html += "</style></head><body>";
+  html += "<div class='card'>";
+  html += "<h2>RoboFusion Setup</h2>";
+  html += "<form action='/save' method='POST'>";
+  html += "<label>WiFi SSID</label><input type='text' name='ssid' value='" + wifiSSID + "' required placeholder='Enter WiFi Name'>";
+  html += "<label>Password</label><input type='password' name='password' placeholder='Enter WiFi Password'>";
+  html += "<label>Device Name</label><input type='text' name='deviceName' value='" + deviceName + "' required>";
+  html += "<button type='submit'>Save & Connect</button>";
+  html += "</form></div></body></html>";
+
+  server.send(200, "text/html", html);
+}
+
+static void handleSave() {
+  if (server.hasArg("ssid")) {
+    wifiSSID     = server.arg("ssid");
+    wifiPassword = server.arg("password");
+    if (server.hasArg("deviceName") && server.arg("deviceName").length() > 0) {
+      deviceName = server.arg("deviceName");
+    }
+
+    preferences.begin("wifi_config", false);
+    preferences.putString("ssid", wifiSSID);
+    preferences.putString("password", wifiPassword);
+    preferences.putString("deviceName", deviceName);
+    preferences.end();
+
+    String resp = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
+    resp += "<style>body{font-family:Arial;background:#0f172a;color:#38bdf8;text-align:center;padding-top:20vh;}</style></head>";
+    resp += "<body><h2>Credentials Saved!</h2><p>Rebooting ESP32-S3 to connect to '" + wifiSSID + "'...</p></body></html>";
+    
+    server.send(200, "text/html", resp);
+
+    Serial.printf("[%lu ms] [NVS] Credentials saved for '%s'. Rebooting...\n", millis(), wifiSSID.c_str());
+    delay(1000);
+    ESP.restart();
+  } else {
+    server.send(400, "text/plain", "Missing SSID");
+  }
+}
+
+/* ------------------------------------------------------------------
+ * startAPMode()
+ * ------------------------------------------------------------------ */
+static void startAPMode() {
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("RoboFusion-Setup");
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/save", HTTP_POST, handleSave);
+  server.begin();
+
+  currentMode = MODE_AP_SETUP;
+  Serial.printf("[%lu ms] AP Mode Started. SSID: RoboFusion-Setup, IP: %s\n", millis(), WiFi.softAPIP().toString().c_str());
+}
+
+/* ------------------------------------------------------------------
  * setup()
  * ------------------------------------------------------------------ */
 void setup() {
@@ -98,25 +174,41 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, ledState);
 
-  /* Initialise IR pin once; probe will temporarily change mode. */
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
   gpio_reset_pin(static_cast<gpio_num_t>(IR_PIN));
   gpio_set_direction(static_cast<gpio_num_t>(IR_PIN), GPIO_MODE_INPUT);
   gpio_pullup_en(static_cast<gpio_num_t>(IR_PIN));
 
-  /* Initialize DHT sensor */
   dht.begin();
 
   Serial.println();
   Serial.println("==========================================");
-  Serial.println("   RoboFusion 1.0 - Stage 2 Initialized   ");
+  Serial.println("   RoboFusion 1.0 - Stage 3 Initialized   ");
   Serial.println("==========================================");
+
+  /* Load NVS Credentials */
+  preferences.begin("wifi_config", true);
+  wifiSSID     = preferences.getString("ssid", "");
+  wifiPassword = preferences.getString("password", "");
+  deviceName   = preferences.getString("deviceName", "RoboFusion-ESP32");
+  preferences.end();
+
+  if (wifiSSID.length() == 0) {
+    Serial.printf("[%lu ms] [NVS] No saved WiFi credentials found. Entering AP Mode...\n", millis());
+    startAPMode();
+  } else {
+    Serial.printf("[%lu ms] [NVS] Loaded SSID: '%s'. Connecting to WiFi...\n", millis(), wifiSSID.c_str());
+    WiFi.mode(WIFI_STA);
+    WiFi.setHostname(deviceName.c_str());
+    WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
+    wifiConnectStartMs = millis();
+    currentMode = MODE_STA_CONNECTING;
+  }
 }
 
 /* ------------------------------------------------------------------
  * loop()  -- Non-blocking scheduler
- *
- * Both jobs run concurrently. Each job keeps its own `last*` stamp,
- * so one job can never delay or freeze the other.
  * ------------------------------------------------------------------ */
 void loop() {
   const uint32_t now = millis();
@@ -151,20 +243,51 @@ void loop() {
   if (now - lastDhtPollMs >= DHT_POLL_INTERVAL_MS) {
     lastDhtPollMs = now;
 
-    // 1. Check if the wire is physically disconnected first
     if (!isSensorConnected(DHT_PIN)) {
       Serial.printf("[%lu ms] [ERROR] DHT11 Sensor Disconnected!\n", now);
     } else {
-      // 2. If connected, attempt to read the values
       float hum = dht.readHumidity();
       float temp = dht.readTemperature();
 
-      // 3. Validate the reading (DHT11 often returns 0.0/0.0 when power is lost but data wire remains)
       if (isnan(hum) || isnan(temp) || (hum == 0.0 && temp == 0.0)) {
         Serial.printf("[%lu ms] [ERROR] DHT11 Sensor Read Failed!\n", now);
       } else {
         Serial.printf("[%lu ms] DHT11 -> Temp: %.1f °C, Humidity: %.1f %%\n", now, temp, hum);
       }
     }
+  }
+
+  /* ---------------------------------------------------------------
+   * Job 4 : Physical Reset Button Polling (GPIO 45)
+   * --------------------------------------------------------------- */
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    if (!buttonPressedState) {
+      buttonPressedState = true;
+      buttonPressStartMs = now;
+    } else if (now - buttonPressStartMs >= BUTTON_HOLD_TIME_MS) {
+      Serial.printf("[%lu ms] [RESET] Reset Button held > 2s! Clearing credentials & rebooting...\n", now);
+      preferences.begin("wifi_config", false);
+      preferences.clear();
+      preferences.end();
+      delay(500);
+      ESP.restart();
+    }
+  } else {
+    buttonPressedState = false;
+  }
+
+  /* ---------------------------------------------------------------
+   * Job 5 : WiFi Connection Manager & Web Server
+   * --------------------------------------------------------------- */
+  if (currentMode == MODE_STA_CONNECTING) {
+    if (WiFi.status() == WL_CONNECTED) {
+      currentMode = MODE_STA_CONNECTED;
+      Serial.printf("[%lu ms] WiFi Connected! IP Address: %s\n", now, WiFi.localIP().toString().c_str());
+    } else if (now - wifiConnectStartMs >= WIFI_TIMEOUT_MS) {
+      Serial.printf("[%lu ms] WiFi Connection Timeout (12s). Switching to AP Mode...\n", now);
+      startAPMode();
+    }
+  } else if (currentMode == MODE_AP_SETUP) {
+    server.handleClient();
   }
 }

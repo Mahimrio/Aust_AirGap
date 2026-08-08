@@ -12,7 +12,8 @@ This file serves as the single source of truth for AI agents (and human engineer
   - **GPIO 1:** Indicator LED (Output)
   - **GPIO 2:** IR Obstacle Sensor (Input)
   - **GPIO 3:** DHT11 Temperature & Humidity Sensor (Data)
-- **Serial Configuration:**
+  - **GPIO 45:** Reset Push-Button (Input with `INPUT_PULLUP`)
+- **Serial & USB Configuration:**
   - Baud rate: `115200`
   - Native USB CDC configuration in `platformio.ini` MUST be preserved:
     ```ini
@@ -31,12 +32,15 @@ This file serves as the single source of truth for AI agents (and human engineer
      - LED Heartbeat: 100 ms (5 Hz)
      - IR Sensor: 1000 ms (1 Hz)
      - DHT11 Sensor: 5000 ms (0.2 Hz)
+     - Button Polling: Continuous state check (2000 ms hold threshold)
+     - Web Server: Non-blocking `server.handleClient()` when in AP mode
 2. **Wire Disconnect Detection (`isSensorConnected`):**
    - Must use the 3000 µs (3 ms) settling delay in `isSensorConnected()` to test pull-up vs pull-down voltage differences.
-   - This delay allows decoupling capacitors on unpowered sensor modules to charge, accurately flagging missing VCC, GND, or OUT/Signal wires.
-3. **Sensor Reading Validation:**
-   - IR Sensor: Use `gpio_get_level()` for digital LOW/HIGH evaluation.
-   - DHT11 Sensor: Use `isnan(temp) || isnan(hum) || (hum == 0.0 && temp == 0.0)` to trap read timeouts and power-loss zeros.
+   - Accurately flags missing VCC, GND, or OUT/Signal wires on sensors.
+3. **WiFi Provisioning & NVS Memory (`Preferences.h`):**
+   - NVS Namespace: `"wifi_config"`.
+   - AP Name: `"RoboFusion-Setup"` (Default IP: `192.168.4.1`).
+   - STA Connection Timeout: 12000 ms (12 seconds) non-blocking fallback to AP mode.
 4. **Log Formatting:**
    - Every log message printed in `loop()` MUST be prepended with a millisecond timestamp: `[%lu ms]`.
 
