@@ -281,7 +281,7 @@ void loop() {
     if (!buttonPressedState) {
       buttonPressedState = true;
       buttonPressStartMs = now;
-    } else if (now - buttonPressStartMs >= BUTTON_HOLD_TIME_MS) {
+    } else if (!pendingReboot && (now - buttonPressStartMs >= BUTTON_HOLD_TIME_MS)) {
       Serial.printf("[%lu ms] [RESET] Reset Button held > 2s! Clearing NVS & WiFi storage...\n", now);
       
       /* Clear Preferences NVS */
